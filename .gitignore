@@ -1,0 +1,25 @@
+# User's Private/Personal files
+personal/
+
+# Python / Jupyter Notebooks
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Large Data & Zip Files
+zips/
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+13CD_cross_section_data-20260707T150327Z-3-001/
+CR-39_software-20260707T150221Z-3-001/
+CR-39_data/*.adat
+
+# Temporary documentation / logs / transcripts
+docs/
