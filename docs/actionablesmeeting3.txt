@@ -1,0 +1,168 @@
+================================================================================
+ACTIONABLES FROM MEETING 3 — D+13C ANALYSIS
+Updated: July 16, 2026
+================================================================================
+Source: meeting3transcript.txt, plus follow-up analysis after the meeting.
+
+Big picture goal: Make CR-39 proton counts trustworthy enough to compare with
+SBD, then extract the D+13C nuclear reaction cross-section.
+
+This file is a simple, plain-language status update. For exact code changes,
+see the git commit history on branch claude/keen-fermi-9ca2ca.
+
+================================================================================
+SECTION 1: EVERYTHING FROM THE MEETING — NOW DONE
+================================================================================
+
+[DONE] Correct detector geometry
+  - SBD at 4.0 cm from target, aperture area 0.172 cm².
+  - CR-39 at 6.0 cm from target.
+  - Solid angle ratio (CR-39/SBD) = 24.81. Both notebooks updated.
+
+[DONE] Fixed the "reusing the same variable name" bug
+  - A CR-39 number (72,550 raw tracks) was accidentally being used as if it
+    were the SBD's own count. This made the two detectors look 16,000%+ apart
+    when they weren't. Fixed by using the SBD's actual measured count instead.
+
+[DONE] Eccentricity cut (e <= 15) applied when the CR-39 data is loaded.
+
+[DONE] C vs D heatmaps for signal region and background strip, generated
+  separately, so we can see where real protons sit vs where junk sits.
+
+[DONE] Confirmed the 50 µm Tantalum filter blocks the 3 MeV D+D protons and
+  lets the 5.6 MeV protons through (checked with SRIM).
+
+[DONE] Confirmed CR-39 was in the chamber for the whole experiment (it's a
+  passive detector, so it doesn't need to be "on" like the SBD electronics).
+
+[DONE] Confirmed the solid-angle math (counts per steradian) is fine to add
+  up directly — steradians have no units, so this isn't an unfair average.
+
+[DONE] Removed the intrinsic-background double-subtraction
+  - The background notch strip sits on the SAME piece of plastic as the
+    signal box, so it already includes the plastic's own baseline noise.
+    Subtracting that noise a second time was double-counting it.
+  - Net signal moved from 22,211.9 to 23,171.9 tracks.
+
+[DONE] Disabled the old angular-correction number (0.9676)
+  - This number was for 115 degrees, but our CR-39 sits at 125 degrees, and
+    the person who found it doesn't trust it anymore. Set to 1.0 (i.e. "no
+    correction") until a real, trusted number is measured.
+
+[DONE] Redid the background subtraction the right way round
+  - OLD (wrong) order: throw away bad tracks first, then subtract one plain
+    number for background.
+  - NEW (correct) order: keep almost all tracks, build a 2D map of every
+    track's size and darkness for both the signal box and the background
+    strip, scale the background map up to the same size as the signal box,
+    subtract map from map, and only THEN throw away the bad ones.
+  - This matters because junk and real protons live in different parts of
+    that map — subtracting the right way removes junk where the junk
+    actually is, instead of just removing a flat number everywhere.
+
+[DONE] Added the third "subtracted" C vs D plot your professor asked for
+  - Now shows three panels side by side: Signal, Background (scaled up), and
+    Subtracted (what's left). Saved as an image in the repo.
+
+[DONE] Added lots of plain-language comments in the notebook explaining every
+  step of the above, written so someone new to the analysis can follow it.
+
+[DONE] Improved the SBD peak fit — and found something important (see below).
+
+================================================================================
+SECTION 2: THE BIG NEW FINDING (not on the original list, but changes it)
+================================================================================
+
+While trying to improve the SBD peak fit (Priority 4), we found that the
+"5 MeV peak" we had been using as our 13C+d signal — 355 counts — is NOT a
+real proton line. It's a DAQ artifact.
+
+WHAT HAPPENED: the detector electronics sometimes see two 2.46 MeV D+D
+protons arrive so close together in time that it counts them as if they were
+one bigger, ~4.84 MeV event. This is called "pile-up." It looks like a real
+peak, but it isn't one.
+
+HOW WE KNOW:
+  1. A real peak's count grows in step with the beam rate. A pile-up peak
+     grows much faster, because it needs TWO protons to land close together.
+     We checked this using all 54 runs, which had different beam rates —
+     the "peak" clearly grows the pile-up way, not the real way.
+  2. The energies add up almost exactly: 2 x 2.46 MeV = 4.91 MeV, very close
+     to the 4.84 MeV we were seeing.
+  3. The detector's own settings file confirms it: two protons arriving
+     within about 2.5 millionths of a second of each other get merged into
+     one reading, and our math says pile-up would need almost exactly that
+     same 2.5-millionths-of-a-second window to explain the peak size. Two
+     completely independent checks landed on the same number.
+
+There IS a small, real signal nearby, around 5.24 MeV instead of 5.6 MeV
+(shifted because a foil in front of the detector slows the protons down a
+little — this also explains why the D+D protons show up at 2.46 MeV instead
+of 3.0 MeV). That real signal has only about 56 counts, not 355.
+
+WHY THIS MATTERS: our "SBD sees way less than expected from CR-39" problem
+just got bigger, not smaller (previously ~2.5x apart, now ~15x apart with
+the corrected count). But it also lines up with a separate finding: when we
+checked whether the CR-39's "background" strip is actually background-free,
+it isn't — the whole piece of plastic looks about equally busy everywhere,
+front to back. That points at the CR-39 plastic itself being heavily fogged
+with noise, which would explain both problems at once.
+
+TO CONFIRM BEFORE THIS GOES IN THE PAPER: someone needs to check the actual
+beamline drawing for what foil (if any) sits in front of the SBD, and get an
+unexposed piece of the same CR-39 batch scanned as a blank, to see if it's
+naturally this noisy.
+
+================================================================================
+SECTION 3: WHAT STILL NEEDS TO BE DONE
+================================================================================
+
+--- PRIORITY: GET A REAL ANGULAR CORRECTION NUMBER ---
+The 0.9676 number is off (Section 1). Your professor described in the
+meeting how the real fix should work: for every left-right position (x) on
+the CR-39, there's a specific angle to the beam. Sum up the counts at each
+x-position, and that IS the angle-by-angle count directly from the scan —
+no separate correction factor needed. Alternatively, just average the whole
+piece and call that "the count at 125 degrees." Not yet built.
+
+--- PRIORITY: CHECK FOR A REAL FOIL IN FRONT OF THE SBD ---
+New, from Section 2. We inferred a foil must be there from the numbers, but
+nobody has confirmed this against the actual hardware setup.
+
+--- PRIORITY: SCAN A BLANK (UNEXPOSED) CR-39 PIECE FROM THE SAME BATCH ---
+New, from Section 2. This is the cleanest way to check whether the CR-39
+plastic itself is the source of the "background everywhere" problem.
+
+--- READ THE REFERENCE PAPERS ---
+Still pending — the 3 previous D+13C measurements and the background-
+subtraction paper your professor is sharing. Needed to understand expected
+angular shape and what to compare our final number against.
+
+--- IF THE NOISE PROBLEM DOESN'T CLEAR UP ---
+May need to redo the CR-39 exposure with TechnoTrack plastic instead of
+TaskTrack, since TechnoTrack has much lower built-in background.
+
+================================================================================
+SECTION 4: SUMMARY TABLE
+================================================================================
+
+| Item                                            | Status   |
+|--------------------------------------------------|----------|
+| Correct detector geometry (SBD 4cm, CR39 6cm)     | DONE     |
+| Fix variable-reuse bug (SBD count)                | DONE     |
+| Eccentricity cut                                  | DONE     |
+| C vs D heatmaps, signal + background              | DONE     |
+| SRIM filter check                                 | DONE     |
+| Remove double-counted intrinsic background         | DONE     |
+| Disable untrusted angular factor (0.9676 -> 1.0)  | DONE     |
+| Subtract background the right way (map-based)      | DONE     |
+| Add subtracted C vs D plot (3rd panel)             | DONE     |
+| Plain-language comments throughout                | DONE     |
+| Improve SBD peak fit                              | DONE — found the peak was pile-up, not signal |
+| Get a real, trusted angular-correction number      | NOT DONE |
+| Confirm the SBD foil against the hardware setup    | NOT DONE |
+| Scan a blank CR-39 piece from the same batch       | NOT DONE |
+| Read the reference papers                         | NOT DONE |
+| Consider switching to TechnoTrack CR-39            | NOT DONE (only if noise problem persists) |
+
+================================================================================
