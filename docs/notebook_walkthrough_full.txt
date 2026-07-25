@@ -1,0 +1,1407 @@
+================================================================================
+   d + 13C EXPERIMENT — COMPLETE CELL-BY-CELL WALKTHROUGH OF ALL THREE NOTEBOOKS
+   Written 26 July 2026
+================================================================================
+
+WHO THIS IS FOR
+---------------
+You, sitting in front of the three notebooks, wanting to know for every cell:
+where did the data come from, what does the code actually do, what number came
+out, and should you believe it.
+
+The three notebooks are:
+
+  A.  SBD_Analysis/20260413_shot_analysis.ipynb        (25 cells)
+      The silicon detector energy spectrum.
+
+  B.  pileup_estimate.ipynb                            (4 cells)
+      The follow-up that checks channel 1 against channel 2.
+
+  C.  CR-39_Python_code/CR39_Analysis_Optimized.ipynb  (55 cells)
+      The plastic track detector scan.
+
+Read them in that order. C depends on a number that comes out of A, and A
+depends on a number that comes out of C, so the two are circular — that
+circularity is one of the open problems and it is spelled out in Part 6.
+
+HOW TO READ THE CELL ENTRIES
+----------------------------
+Each cell gets:
+    DATA IN    — where the numbers physically come from
+    LOGIC      — what the code does, in enough detail to re-derive it
+    RESULT     — what came out
+    STATUS     — trustworthy / stale / never run / broken
+
+"STALE" is important and appears a lot. A stale cell is one where somebody
+edited the code but never re-ran it, so the output saved in the .ipynb file
+was produced by an OLDER version of the code. The output you see on screen is
+not what the code on screen would produce. There are several of these.
+
+
+================================================================================
+   PART 0 — THE PHYSICS, IN PLAIN LANGUAGE
+================================================================================
+
+WHAT WE ARE TRYING TO MEASURE
+A beam of deuterons (heavy hydrogen nuclei, "d") is fired at a carbon-13
+target. Sometimes a deuteron fuses with a 13C nucleus:
+
+        d + 13C  ->  14C + p          Q = +5.951 MeV
+
+That reaction spits out a proton. We want to know how often this happens —
+the cross-section. To get that we need to count those protons.
+
+THE PROBLEM: THAT REACTION IS RARE
+The target chamber is full of deuterium, so far and away the most common
+reaction is deuterons hitting each other:
+
+        d + d  ->  T + p              proton comes out at 3.02 MeV
+
+This happens roughly 100,000 times for every one 13C+d event. So we are
+looking for a needle in a haystack, and the haystack is made of the same
+material as the needle (both are protons).
+
+THE TWO DETECTORS
+
+  SBD (Silicon Barrier Detector)
+      An electronic detector. Every proton that hits it produces a voltage
+      pulse whose height is proportional to the proton's energy. So the SBD
+      gives us an ENERGY SPECTRUM: a histogram of "how many protons at each
+      energy". Different reactions make different-energy protons, so they show
+      up as separate peaks. Sits 4.0 cm from the target, at 90 degrees to the
+      beam, behind a small aperture of area 0.172 cm^2.
+
+  CR-39 (plastic nuclear track detector)
+      A piece of clear plastic. A proton punching through it leaves a trail of
+      broken molecules. Soak the plastic in hot NaOH ("etching") and those
+      trails open up into little conical pits you can see under a microscope.
+      A scanner photographs the whole piece and tabulates every pit.
+      Sits at ~125 degrees to the beam, behind a 125-50 um tantalum filter.
+
+      CRUCIAL: CR-39 does NOT measure energy. It gives you a pit's DIAMETER,
+      DARKNESS (contrast) and OVAL-NESS (eccentricity), and its x,y position.
+      Diameter correlates with energy but is not a clean energy measurement.
+      This is why the question "where is the CR-39 peak" needs the careful
+      answer given in Part 5.
+
+      The Ta filter is the trick: it is thick enough to completely stop the
+      3.02 MeV D+D protons, but thin enough that the faster 5.6 MeV 13C+d
+      protons get through. So in principle the CR-39 only ever sees signal.
+      In practice this is not what we observe — see Problem #1.
+
+THE STRATEGY
+Count the D+D protons (easy, there are millions) and count the 13C+d protons
+(hard, there are a few dozen). The ratio of the two, times the known D+D
+cross-section, gives the 13C+d cross-section. The absolute beam current and
+target thickness cancel out in the ratio, which is why it is done this way.
+
+
+================================================================================
+   PART 1 — NOTEBOOK A: SBD_Analysis/20260413_shot_analysis.ipynb
+================================================================================
+
+WHERE THE DATA COMES FROM
+-------------------------
+The CAEN N6724B digitizer wrote one folder per run under
+
+    13CD_cross_section_data-.../13CD_cross_section_20260413/DAQ/<run>/
+
+Inside each run folder:
+    FILTERED/DataF_CH1@N6724B_214_<run>.root   detector channel 1
+    FILTERED/DataF_CH2@N6724B_214_<run>.root   detector channel 2
+    <run>_info.txt                             live time, real time, settings
+
+Each .root file has a tree called Data_F with a branch CalibEnergy — one
+floating-point energy in MeV per detected pulse. That is the raw material for
+the entire notebook.
+
+Runs are spread over four days: 13, 14, 15 and 16 April 2026.
+
+
+CELL 0 — imports
+  LOGIC   numpy, matplotlib, scipy.optimize.curve_fit, uproot.
+          uproot is the important one: it reads CERN .root files in pure
+          Python, so we do not need a ROOT installation.
+  STATUS  fine.
+
+CELL 1 — dead code
+  A triple-quoted string holding the original ROOT-based file-opening code
+  from Shahina's Mac. It is a string, so it does nothing. Left as a record of
+  what the analysis used to look like.
+  STATUS  harmless.
+
+CELL 2 — build the file list
+  DATA IN  the DAQ folder tree.
+  LOGIC    Hard-codes a curated list of 54 run names: 4 runs from 13 April,
+           20 from 14 April, 22 from 15 April (run 06 deliberately skipped),
+           8 from 16 April. For each, builds the CH2 .root path and checks it
+           exists.
+  RESULT   "Found 54 of 54 root files."
+  NOTE     This is CH2 ONLY. The entire notebook analyses channel 2. Channel 1
+           is never opened here. That matters — see Problem #4.
+  NOTE     There are actually 72 run folders on disk. This notebook uses 54 of
+           them. The reason run 15-06 is skipped, and why the other 18 folders
+           are excluded, is not documented anywhere in the repo.
+  STATUS   works, but the run selection is undocumented.
+
+CELL 3 — empty placeholder
+  Replaced the old ROOT TChain .Add() calls. Does nothing.
+
+CELL 4 — load all the energies
+  LOGIC    Loops the 54 files, opens each with uproot, pulls
+           tree["CalibEnergy"] as a numpy array, and np.concatenate's them
+           into one master array calib_all_1.
+  RESULT   5,441,926 events.
+  STATUS   trustworthy.
+
+CELL 5 — the raw spectrum
+  LOGIC    500-bin histogram of calib_all_1 from 0 to 15 MeV, log y-axis.
+  RESULT   A huge peak near 2.5 MeV and a tiny bump near 5 MeV, plus a
+           continuum. Log scale is essential — the 2.5 MeV peak is five
+           orders of magnitude taller than anything else.
+  STATUS   fine.
+
+CELL 6 — fit the ~5 MeV peak  *** THIS IS THE CELL THAT STARTED EVERYTHING ***
+  LOGIC    Models the region 4.0-6.0 MeV as a Gaussian sitting on a straight
+           line:  f(x) = A*exp(-0.5*((x-mu)/sigma)^2) + m*x + b
+           Fits the five parameters with scipy curve_fit.
+           Then converts the fitted Gaussian into a count:
+               N = A * sigma * sqrt(2*pi) / bin_width
+           (that is just "area under a Gaussian, divided by bin width to turn
+           an area in counts*MeV into a number of counts").
+  RESULT   mu    = 4.8375 MeV
+           sigma = 0.0940 MeV
+           N     = 355.0 +/- 27.1 counts
+  WHAT WE  For a long time this 355 was taken to BE the 13C+d yield. Every
+  THOUGHT  downstream cross-section number in this repo traces back to it.
+  STATUS   the fit itself is fine. The interpretation was wrong. Cells 7-10
+           are the correction.
+
+CELL 7 — markdown: "is the 5 MeV peak real?"
+  Lays out three reasons to be suspicious of the 4.838 MeV peak:
+    (a) POSITION. Two D+D protons at 2.457 MeV summed together give
+        2 x 2.457 = 4.914 MeV. Observed 4.838. That is close.
+    (b) WIDTH. If you add two independent measurements each of width 0.0578,
+        the sum has width sqrt(2)*0.0578 = 0.082. Observed 0.094. Also close.
+    (c) ENERGY DOESN'T MATCH. The 13C(d,p)14C proton should come out at
+        Q * 14/15 = 5.55 MeV, not 4.84. The peak is in the wrong place by
+        0.7 MeV, which is far too big to be a calibration error.
+  Then it states the decisive test, which is the key idea of the whole
+  notebook:
+
+        A REAL nuclear line is produced by ONE particle. Its count is
+        proportional to the beam rate R.  N ~ R.
+        A PILE-UP peak needs TWO particles arriving close together. Its count
+        is proportional to R squared.  N ~ R^2.
+
+        So take the ratio  N_peak / N_(2.46 MeV line).
+        For a real line that ratio is FLAT as you change the rate.
+        For pile-up that ratio RISES LINEARLY with rate.
+
+  We have 54 runs at different beam currents, so we can just measure it.
+
+CELL 8 — THE PILE-UP TEST
+  DATA IN  re-reads all 54 CH2 .root files, plus each run's _info.txt to get
+           that run's live time (parsed out of the CH2 block with a regex).
+  LOGIC    Four energy windows are defined:
+               LOW      2.25 - 2.65 MeV   the intense D+D line
+               PILEUP   4.60 - 5.05 MeV   the suspect peak
+               SIGNAL   5.08 - 5.38 MeV   where 13C+d SHOULD be
+               SIDE     5.60 - 6.60 MeV   flat continuum, for background
+           For each run: count events in each window, and compute
+               rate = N_LOW / live_time
+           Sort the 54 runs by rate. Pool them into 4 groups chosen so each
+           group has roughly equal D+D statistics (this matters — individual
+           runs have only 1-10 counts in the high windows, way too few).
+           For each group compute the background-subtracted ratio
+               ratio = (N_window - background) / N_LOW
+           Then fit that ratio-vs-rate with two competing models:
+               constant  (the "real line" hypothesis)
+               straight line  (the "pile-up" hypothesis)
+           and report chi-squared for each, plus how many sigma the slope is
+           away from zero.
+
+           Finally, an independent hardware cross-check. For a Poisson source,
+           the number of unresolved double-pulses is
+               N_sum = N_low * R * tau
+           where tau is the time window inside which two pulses cannot be
+           told apart. Invert that for tau and compare it against the trigger
+           holdoff actually written in the digitizer's settings.xml.
+
+  RESULT   *** THIS CELL HAS NEVER BEEN RUN IN THE SAVED NOTEBOOK. ***
+           It has no output stored. I re-ran the identical logic over all the
+           CH2 runs on disk (71 folders, 5,354,918 D+D events, 52.92 h live)
+           and got:
+
+               4.84 MeV window:  raw 403, background 21.2, NET 381.8
+                   ratio x1e4 by rate group: 0.432, 0.558, 0.920, 0.950
+                   at rates 18.9, 28.3, 33.3, 43.3 counts/s
+                   constant model chi2 = 42.68 / 3 dof     <- terrible fit
+                   linear model   chi2 =  6.24 / 2 dof     <- good fit
+                   slope = +6.0 sigma        VERDICT: PILE-UP
+
+               5.24 MeV window:  raw 69, background 14.1, NET 54.9 +/- 9.1
+                   ratio x1e4 by rate group: 0.115, 0.140, 0.075, 0.081
+                   constant model chi2 = 4.26 / 3 dof      <- fine
+                   linear model   chi2 = 2.51 / 2 dof      <- no better
+                   slope = -1.3 sigma        VERDICT: REAL LINE
+
+               Hardware cross-check:
+                   tau needed to explain the whole 4.84 peak = 2537 ns
+                   trigger holdoff set in settings.xml      = 2500 ns
+                   agreement: 1.5%
+
+  WHY THE HARDWARE NUMBER IS THE CLINCHER
+           The digitizer is configured with a 2.5 microsecond trigger holdoff
+           (SRV_PARAM_CH_TRG_HOLDOFF) and an 8 microsecond trapezoidal shaping
+           filter (TRISE 5000 ns + TFLAT 3000 ns). A second proton landing
+           inside that 2.5 us window never gets its own trigger — the
+           electronics fold it into the same pulse and report one event at the
+           combined energy. The digitizer's pile-up rejection cannot see it
+           because from the hardware's point of view there was only one
+           trigger. We did not tune anything to get 2537 ns; it fell out of
+           the count ratio, and it lands within 1.5% of a number that was set
+           in a config file before the experiment ran. That is not a
+           coincidence.
+
+  STATUS   the logic is sound and the conclusion is solid, BUT the cell has
+           no saved output. Anyone opening the notebook sees an empty cell
+           under a markdown header that promises a result. RUN IT.
+
+CELL 9 — markdown: the foil explanation
+  Once you accept that 4.84 is pile-up and ~5.2 is the real line, the energies
+  finally make sense — if there is a foil in front of the SBD:
+
+      line          vacuum energy    observed     energy lost
+      D(d,p)T          3.02 MeV      2.457 MeV      0.563 MeV
+      13C(d,p)14C      5.55 MeV      ~5.20 MeV      ~0.35 MeV
+
+  The faster proton loses LESS energy. That is exactly how stopping power
+  works (dE/dx falls as energy rises). Both losses are consistent with about
+  50 um of aluminium-equivalent material. One foil explains both lines at
+  once. Nothing else we tried explains either.
+
+  CAVEAT WRITTEN INTO THE CELL, AND IT IS A REAL ONE: this foil is INFERRED
+  from the energy losses. It is not documented anywhere in the repo. Before
+  publishing, someone needs to look at the beamline drawing and confirm the
+  foil and its thickness, then run SRIM for both proton energies.
+
+CELL 10 — measure the REAL 13C+d line
+  LOGIC    Deliberately does NOT fit a Gaussian as the primary method, and the
+           comment explains why: with ~55 counts a 5-parameter fit is
+           unstable — sigma runs into its bound and the answer swings between
+           27 and 39 depending on how you bin. Instead:
+               count everything in 5.05 - 5.40 MeV
+               estimate background from the flat 5.60 - 6.60 MeV sideband,
+                   scaled by window width
+               subtract
+           Then a dead-time correction: events arriving while the DAQ is busy
+           are lost outright, so multiply by real_time / live_time.
+           A constrained Gaussian fit (sigma forced above 0.040 MeV, because
+           the detector cannot possibly resolve the 5.2 line better than it
+           resolves the intense 2.46 line at sigma=0.063) is shown ONLY as a
+           consistency check, with an explicit "do not quote this".
+
+  RESULT   *** ALSO NEVER RUN — no saved output. ***
+           My re-run over the CH2 data gives NET = 54.9 +/- 9.1 counts,
+           a 6.0-sigma signal, and 60.3 counts after dead-time correction.
+
+  THE HEADLINE: the number we had been using (355) is about 6.5x too big.
+           The real 13C+d yield on the SBD is around 55-60 counts.
+
+  NAMING NOTE the cell suffixes everything _13c on purpose, because plain
+           names like pc2 and mu2 get reused by cell 13 for the 2.46 MeV line
+           and would be silently overwritten. That exact kind of variable
+           shadowing caused a 16,000% error earlier in this project.
+
+CELL 11 — one-liner: 357/0.172 = 2075.58
+  Flux at the SBD in counts/cm^2, using 357 counts and the 0.172 cm^2
+  aperture. Note it says 357, not 355. Scratch arithmetic.
+  STATUS   superseded — should use ~60, not 357.
+
+CELLS 12, 13, 14 — publication-quality spectrum plots
+  Same fits as cell 6, dressed up: cell 12 adds a zoomed inset on the 5 MeV
+  region; cell 13 fits BOTH peaks and draws two insets with arrows; cell 14
+  is the clean version with text annotations.
+  RESULT   Peak 1: mu = 4.8375 MeV, sigma = 0.0940, 355.0 +/- 27.1
+           Peak 2: mu = 2.4599 MeV, sigma = 0.0632, 5,169,117 +/- 179,084
+  PROBLEM  Cell 14 labels the 4.84 MeV peak "protons from 13C+D" with an
+           arrow. Given cells 7-10, that label is WRONG. This is the figure
+           most likely to end up in a talk. FIX THE LABEL.
+  STATUS   plots fine, one label is now known-wrong.
+
+CELLS 15-18 — crude window counts
+  counts_13CD = events between 4.0 and 5.0 MeV        -> 452
+  counts_DD   = events between 0.7 and 3.0 MeV        -> 5,438,178
+  STATUS   the 4.0-5.0 window is centred on the pile-up peak, so 452 is a
+           pile-up count, not a signal count. Superseded by cell 10.
+
+CELLS 19-21 — the first cross-section number
+  LOGIC    cross_DD = 20.56 barns (angle-integrated), so the differential
+           cross-section is taken as 20.56/(4*pi) — i.e. assuming D+D is
+           isotropic. Then
+               dsigma/dOmega (13CD) = (counts_13CD / counts_DD) * dsigma/dOmega (DD)
+  RESULT   1.36e-4  (units as written: barns/sr)
+  THREE PROBLEMS HERE
+           (i)  counts_13CD is the pile-up peak. Wrong numerator.
+           (ii) 20.56 barns for D(d,p)T is far too large — that reaction is
+                a few tens of millibarns at these energies. This looks like a
+                barns/millibarns unit slip and needs checking against the
+                actual source.
+           (iii) D+D at these energies is NOT isotropic, so dividing the
+                angle-integrated value by 4*pi is an approximation that has
+                not been justified anywhere.
+  STATUS   do not quote this number.
+
+CELL 22 — 357/0.172 again. Duplicate of cell 11.
+
+CELL 23 — empty.
+
+CELL 24 — CROSS-DETECTOR VALIDATION (SBD vs CR-39)
+  LOGIC    Take the CR-39's net track count, convert it to what the SBD should
+           have seen, and compare against what the SBD did see.
+           Solid angle of each detector, small-aperture approximation:
+               Omega = Area / r^2
+               SBD  : 0.172 / 4.0^2 = 0.010750 sr
+               CR-39: 9.6   / 6.0^2 = 0.266667 sr
+               ratio = 24.81
+           expected_sbd = cr39_net / 24.81
+
+  RESULT SAVED IN THE FILE (STALE — from an older version of the code):
+               cr39_net = 22,211.9      expected 925.4
+               observed = 355.0         ratio 2.61 (+160.7%)
+               facility_factor printed as 0.9676
+
+  WHAT THE CODE ON SCREEN WOULD ACTUALLY PRODUCE NOW:
+               cr39_net = 23,171.9      expected 934.0
+               observed = pc1_real ~ 60 counts
+               ratio ~ 15.6x
+
+  This is the single most important stale output in the repo. The saved
+  output says "we are off by a factor of 2.6". The current code says
+  "we are off by a factor of 15". Those lead to completely different
+  conclusions about whether the experiment makes sense.
+
+  ALSO NOTE, honestly flagged in the cell's own comment: the SBD count
+  integrates all 54 runs (53 hours) while the CR-39 integrates its own 5-hour
+  exposure. Comparing them directly is only valid if those windows coincide,
+  and they do not obviously do so. This alone could be a factor of several.
+
+
+================================================================================
+   PART 2 — NOTEBOOK B: pileup_estimate.ipynb
+================================================================================
+
+WHAT THIS NOTEBOOK IS FOR
+Notebook A only ever looked at CH2. This one asks: the digitizer has two
+channels, what is channel 1, and does the pile-up story hold up there too?
+
+CELL 0 — markdown: the setup and the maths
+  States that CH1 is the primary SBD signal line at ~1.29 counts/s, and CH2 is
+  the high-rate reference/monitor at ~28.11 counts/s. Gives the Poisson model:
+
+      P(at least one more pulse within time t) = 1 - exp(-r*t)
+      and for small r*t this is just r*t
+      N_pileup = sum over runs of  N_low * (1 - exp(-r*t))
+
+  CAUTION  the markdown says CH1 recorded "66 real d+13C reaction protons
+           (5.24 MeV)". 66 is the RAW window count. After sideband
+           subtraction the net is 34.8. The markdown overstates it.
+
+CELL 1 — load both channels
+  DATA IN  every folder under DAQ/ starting with "2026" — so this notebook
+           sweeps ALL runs, unlike notebook A's curated 54.
+  LOGIC    Same four windows as notebook A. Regex out the live time from the
+           per-channel block of each _info.txt. For each channel build a list
+           of per-run records with live time and the four window counts.
+  STATUS   *** NEVER RUN. No output saved. ***
+           My re-run: CH1 = 72 runs, CH2 = 71 runs.
+
+CELL 2 — CH2, the "1% proof"
+  LOGIC    Total the CH2 numbers, subtract the sideband background from the
+           4.84 window, then invert the Poisson relation for the effective
+           resolving time:
+               tau_eff = (net_pileup / N_low) / mean_rate
+           and compare against the 2500 ns hardware holdoff.
+  RESULT   *** NEVER RUN. *** My re-run:
+               N_low        = 5,354,918
+               live time    = 190,520 s (52.92 h)
+               mean rate    = 28.11 counts/s
+               net pile-up  = 381.8 counts
+               tau_eff      = 2537 ns
+               holdoff      = 2500 ns
+               agreement    = 98.5%
+  VERDICT  this works and it is the strongest single piece of evidence in the
+           whole project. It should be run and the output saved.
+
+CELL 3 — CH1 summary
+  LOGIC    Same totals for channel 1, plus a dead-time correction using the
+           hard-coded factor 53.289 / 34.443 = 1.547.
+  RESULT   *** NEVER RUN. *** My re-run:
+               N_low     = 160,285      rate 1.293 counts/s
+               live time = 34.443 h     real time = 58.108 h
+               5.24 window: raw 66, background 31.2, NET 34.8 +/- 9.9
+               4.84 window: raw 139, background 46.8, NET 92.2
+
+  THIS IS WHERE THE CH1 STORY BREAKS DOWN, AND IT IS NOT FLAGGED ANYWHERE:
+
+    (a) Run the same tau_eff inversion on CH1 and you get 445 MICROseconds,
+        not 2.5. That is 178 times the holdoff. Meaning: CH1's 4.84 MeV
+        excess of 92 counts CANNOT be trigger-holdoff pile-up. CH1 runs at
+        1.29 counts/s, which is 22x slower than CH2, and pile-up scales as
+        rate squared — so CH1 should have essentially none. Something else is
+        producing those 92 counts and we do not currently know what.
+
+    (b) The dead-time factor is wrong. The cell hard-codes 53.289/34.443 =
+        1.547, but the actual real time summed from the CH1 blocks of the
+        info files is 58.108 h, giving 58.108/34.443 = 1.687. Where 53.289
+        came from is not documented. And notebook A cell 10 uses a THIRD
+        value, 53.289/48.979 = 1.088. Three different dead-time corrections
+        for the same experiment.
+
+    (c) CH1's dead time is enormous: 34.4 h live out of 58.1 h real means the
+        DAQ was busy 41% of the time. That is a large correction to be
+        applying with an undocumented constant.
+
+    (d) The rate-scaling test does not work on CH1. Pooling its runs by rate
+        gives groups at 0.5, 61 and 197.7 counts/s — a 400x spread, which
+        means a handful of runs behave completely unlike the rest. Both the
+        4.84 and the 5.24 windows come out "rising with rate" (+10.7 and
+        +8.1 sigma), which for the 5.24 window contradicts CH2. The CH1 run
+        list needs cleaning before any rate test on it means anything.
+
+  BOTTOM LINE ON THIS NOTEBOOK: the CH2 half is excellent. The CH1 half has
+  an unexplained 92-count excess, a wrong dead-time constant, and a rate test
+  that is not usable as-is. And none of it has been run.
+
+
+================================================================================
+   PART 3 — NOTEBOOK C: CR39_Analysis_Optimized.ipynb
+================================================================================
+
+WHERE THE DATA COMES FROM
+-------------------------
+One binary file:
+
+    CR-39_data/A20260413_13CD_125-50umTaFilter_W75_5hr_40x_backside_s0.cpsa
+
+.cpsa is the MIT scanner's own binary format. The scanner drove a microscope
+over the plastic in a 106 x 144 grid of frames, and for every pit it found it
+recorded six numbers. The file layout is:
+
+    48-byte header    version, grid size, pixel size, frame size, limits
+    then per frame:
+        28-byte frame header  (frame number, stage x/y, track count, focus)
+        then six packed arrays, one after the other, all of length n_tracks:
+            d[n]  int16   diameter
+            e[n]  int8    eccentricity
+            c[n]  int8    normal contrast
+            a[n]  int8    average contrast
+            x[n]  int16   pixel x within frame
+            y[n]  int16   pixel y within frame
+    ASCII trailer
+
+Note the arrays are stored COLUMN-WISE (all diameters, then all
+eccentricities, ...), not row-wise. That is what makes the fast reader
+possible.
+
+Scan parameters that come out of the header:
+    grid        106 x 144 = 15,264 frames
+    pixel size  0.3280 um
+    frame size  444.1 x 328.7 um
+    total area  22.2793 cm^2
+
+
+CELLS 0-1 — title and imports
+  Standard. Sets a consistent matplotlib style. tqdm is optional with a
+  no-op fallback.
+
+CELL 2 — imports.  RESULT "Imports OK".
+
+CELLS 3-4 — CONFIGURATION. The one cell you edit.
+  The quality cuts:
+      D_MIN, D_MAX =  2.0, 13.0   um      track diameter
+      E_MIN, E_MAX =  0,   15            eccentricity (how oval)
+      C_MIN, C_MAX =  0,   20            normal contrast (how light)
+      X/Y bounds   = -2.5, 2.5   cm      stay on the plastic
+  The regions:
+      signal box    x in [-1.5, 1.5], y in [-1.8, 1.4]   -> 9.6000 cm^2
+      background    x in [-1.37, 1.47], y in [1.50, 1.89] -> 1.1076 cm^2
+      area ratio    8.6674
+  A comment records that D_MAX was tightened from 17.5 to 13.0 um to cut out
+  dust, surface defects and slow heavy ions.
+
+CELLS 5-6 — the fast .cpsa reader (class ScanData)
+  LOGIC    The original reader.py called struct.unpack once per value, per
+           track — millions of Python-level calls. This version reads each
+           whole array in one np.frombuffer call, converts units with
+           vectorised numpy arithmetic, applies all six cuts as one boolean
+           mask, and stacks the surviving tracks into a list of arrays that
+           gets vstack'ed exactly once at the end (rather than pd.concat
+           inside the loop, which is quadratic). Roughly 20x faster.
+  UNIT CONVERSIONS, which are easy to get wrong and are worth knowing:
+           d_um = 100.0 * d_raw * pixel_size
+           x_cm = frame_x - 0.5*frame_width  + x_raw * pixel_size
+           y_cm = frame_y - 0.5*frame_height + y_raw * pixel_size
+           i.e. pit position = where the stage was, minus half a frame to get
+           to the frame's corner, plus the pit's offset within the frame.
+  ODDITY   _parse_header reads a float, then seeks back to 0 and re-reads
+           everything properly. The first read is dead code. Harmless but
+           confusing.
+  RESULT   "ScanData class defined". Reads 15,264 frames in about 1.6 s.
+
+CELLS 7-8 — load with cuts
+  RESULT   120,469 tracks survive all cuts. Summary statistics:
+               d: mean 7.571 um, median 7.485, range 2.03 - 13.00
+               e: mean 4.153, median 3
+               c: mean 11.675, median 11
+           Memory 2.29 MB.
+
+CELL 9 — dump the frames table
+  15,264 rows. Useful for spotting focus drift: focus goes from 3.77 at the
+  top of the piece to 52.60 at the bottom, which is a large tilt.
+
+CELL 10 — *** A LANDMINE ***
+      area_CR_39 = np.pi*2.5**2
+      tracks = 34183
+  The second line OVERWRITES the tracks DataFrame with a plain integer. From
+  here until cell 27 re-loads it, `tracks` is the number 34183, not a table.
+  Cells 13-21 happen to use a different variable (`tr`) so nothing crashes,
+  but this is exactly the shadowing pattern that caused the 16,000% bug in
+  the SBD notebook. Also: 34,183 is not any number computed anywhere in this
+  notebook. Its origin is undocumented.
+
+CELL 11 — 34183 / (pi * 2.5^2) = 1740.93 tracks/cm^2
+  A track density based on the mystery number and the full circular area.
+  Not used downstream. STATUS: orphaned.
+
+CELLS 12-13 — load again WITHOUT quality cuts
+  RESULT   530,122 raw tracks inside the spatial bounds.
+  So the quality cuts throw away 77% of everything. That is a lot, and it is
+  the first hint that this piece of plastic is very noisy.
+
+CELL 14 — the contour plot that justifies the cuts
+  LOGIC    2D histogram of diameter vs contrast on the RAW tracks, drawn as
+           log-spaced contours.
+  WHAT YOU SEE  Two distinct islands.
+           A SIGNAL island: diameter around 8 um, contrast under ~20.
+           A BACKGROUND island: diameter under 5 um, contrast above ~40.
+           Real protons make wide, dark pits. Junk makes small, faint ones.
+           The islands separate cleanly, which is why the cuts are placed
+           where they are.
+
+CELLS 15-16 — markdown: the meeting-3 ordering fix, in plain English
+  The key insight, and it is a genuinely important one:
+
+      OLD (wrong) order:  apply the D/C/e cuts, then subtract one background
+                          NUMBER scaled by area.
+      NEW (right) order:  subtract background as a 2D MAP first, then cut.
+
+  Why it matters: the old way assumes the background is spread evenly across
+  diameter-contrast space. It is not — it clumps in one corner. Subtracting a
+  single average number removes junk from places where there was no junk and
+  leaves it where there was.
+
+CELL 17 — C-vs-D heatmap subtraction
+  LOGIC    Seven steps:
+             1. eccentricity cut ONLY (e <= 15). No diameter/contrast cut yet
+                — that is the whole point.
+             2. build the diameter-vs-contrast 2D histogram for the signal box
+             3. same for the background notch
+             4. multiply the notch histogram by 8.6674 (the area ratio)
+             5. subtract bin by bin
+             6. NOW apply the diameter and contrast cuts to the SUBTRACTED map
+             7. sum what is left
+           Bin edges are deliberately chosen (0.2 um in diameter, 1.0 unit in
+           contrast) so that 2.0, 13.0 and 20 land exactly on bin edges. If
+           they did not, the cut in step 6 would slice through a bin and
+           miscount it.
+  RESULT   raw tracks 530,122 -> after e-cut only: 423,796
+           signal heatmap inside the cut box     : 70,833
+           scaled background inside the cut box  : 47,870
+           NET                                   : 22,963
+  CROSS-CHECK  the old scalar method (cell 29) gives 23,172. The two agree to
+           0.9%, which is reassuring about the method — but see below, both
+           may be measuring the wrong thing.
+
+CELL 18 — markdown: something is wrong
+  Honest write-up: the subtraction did NOT produce a clean proton island. The
+  scaled notch accounted for ~92% of everything in the signal box. Two
+  possible explanations, needing different fixes:
+      1. the notch has protons in it too, so we are subtracting our own signal
+      2. the plastic really is that noisy
+  Then designs a test to tell them apart.
+
+CELL 19 — THE DIAGNOSTIC THAT FOUND THE BIG PROBLEM
+  LOGIC    Slice the detector into horizontal strips 0.1 cm tall, count tracks
+           in each, divide by the strip's area to get a density.
+           IMPORTANT SUBTLETY, handled correctly: the CR-39 piece is a CIRCLE
+           of radius 2.5 cm, not a square. Near the top and bottom a strip
+           contains less plastic. So for each strip the code computes the
+           circle's half-width  sqrt(R^2 - y^2), intersects it with the
+           x-window, and uses that as the real area. Without this you would
+           see a fake falloff at the edges that is just the piece running out.
+           Poisson error bars sqrt(N)/area.
+  RESULT   density inside the signal box   : 24,517 tracks/cm^2
+           density inside the notch        : 22,165 tracks/cm^2
+           density above the notch         : 15,309 tracks/cm^2
+           NOTCH / BOX RATIO               : 0.904
+
+  WHAT THIS MEANS. The "background" notch is 90% as dense as the signal box,
+  and the profile is essentially flat right across the piece. The notch is not
+  a shadowed, signal-free reference region. It looks like the same illuminated
+  field as the signal box. Subtracting it removes ~90% of whatever is there,
+  signal included.
+
+  The cell's own caveat is right and should be kept: the "above the notch"
+  number sits near the curved edge where fewer frames were scanned and the
+  area correction is least reliable, so do not read that falloff as physics.
+
+CELL 20 — raw 1D distributions of d, c, e with the cut lines drawn on.
+  Sanity check that the cuts land where the contour plot said they should.
+
+CELL 21 — 2D heatmap of diameter vs eccentricity, log colour scale.
+  Emits a harmless warning about an empty legend. Axis is labelled just 'd'
+  and the plot title says "Eccentricity vs X" while it actually plots
+  eccentricity vs diameter. Cosmetic, but confusing in a talk.
+
+CELLS 22 and 23 — INCIDENT ANGLE AND THE DYNAMIC ECCENTRICITY CUT
+  These two cells are BYTE-FOR-BYTE IDENTICAL. One is a leftover copy.
+  Delete one.
+
+  LOGIC    For a flat detector at distance d0 from a point source, a pit at
+           radius r from the centre was made by a proton that arrived at
+                theta = arctan(r / d0)
+           So the corners of the piece see protons at a steep angle, and
+           steeply-arriving protons make ELONGATED pits — higher eccentricity.
+           A flat cut of e <= 15 everywhere therefore throws away real protons
+           near the edges purely because of geometry.
+           The cells replace it with a position-dependent threshold:
+                e_max(theta) = 15.0 + 20.0 * (theta / 30)^2
+           i.e. 15 at normal incidence rising to 35 at 30 degrees.
+  RESULT   *** NEVER RUN. No output saved. ***
+  PROBLEMS
+      (a) The cells use d0 = 6.0 cm. Cells 33 and 34 of the same notebook use
+          r = 4.0 cm, with a comment saying 6.0 was WRONG and 4.0 is right.
+          The same notebook contradicts itself about its own geometry. At
+          4.0 cm the maximum incident angle is 32.0 degrees; at 6.0 cm it is
+          22.6 degrees. That difference changes the answer materially.
+      (b) The comment cites "Figure 9b" of the literature for the
+          eccentricity-vs-angle curve. In Przybocki et al. (2021), Fig. 9 is
+          track DIAMETER vs energy. The eccentricity-vs-angle data is Fig. 11.
+          The citation is to the wrong figure.
+      (c) The quadratic form 15 + 20*(theta/30)^2 is not from the paper. It is
+          a smooth curve someone drew through the four quoted values. It has
+          no error bars and no justification for the quadratic shape.
+      (d) The quoted values themselves ("theta=20 -> e ~ 13-14") are the
+          2-hour-etch, high-energy-filter numbers. Our CR-39 was etched 5
+          hours. At 5 h etch the paper's numbers are different. See Part 4.
+
+CELLS 24-27 — spatial track density maps
+  2D histogram of x vs y with marginal projections along each axis, on a log
+  colour scale. Cell 25 is before the reload, cell 27 reloads with the current
+  cuts and re-plots. The reload is why `tracks` becomes a DataFrame again
+  after cell 10 clobbered it.
+
+CELLS 28-29 — THE MAIN BACKGROUND SUBTRACTION
+  LOGIC    Count tracks in the signal rectangle and in the notch rectangle.
+           Scale the notch by the area ratio and subtract.
+           Uncertainty: sqrt(N_sig + scale^2 * N_bg) — the standard Poisson
+           propagation, and correctly includes the scale factor squared.
+           An explicit comment records a meeting-3 decision: do NOT subtract a
+           separate "intrinsic plastic background" of ~100 tracks/cm^2 on top,
+           because the notch is on the same piece of plastic and already
+           contains that baseline. Subtracting both would double-count.
+  RESULT   tracks in signal box               : 72,550
+           tracks in background strip         : 5,697
+           background scaled by 8.6674        : 49,378.1
+           NET SIGNAL                         : 23,171.9 +/- 707.5
+
+CELL 30 — the density map with the two boxes drawn on it. Visual check.
+
+CELL 31 — pixel-by-pixel subtraction, MIT-GUI style
+  LOGIC    Instead of subtracting one total, work out the average background
+           per histogram pixel (background density x pixel area) and subtract
+           it from every pixel in the signal region individually. Then report
+           the same statistics the MIT GUI reports, so the two can be compared
+           directly.
+  RESULT   4,352 pixels
+           total 23,041.7          (vs 23,171.9 from the scalar method — 0.6%)
+           per-pixel mean 5.2945, std dev 4.4379
+           min -8.265, max 24.735
+           (mean dev)/average 0.6757
+  READING IT  a std dev of 4.44 on a mean of 5.29 means the signal per pixel
+           is barely above its own scatter. The map is noise-dominated. Also
+           saves counts2d_net for later cells.
+
+CELL 32 — projections with signal and background overlaid, colour-coded.
+  RESULT   confirms 72,550 and 5,697 by a second route.
+
+CELLS 33-34 — SOLID ANGLE CORRECTION AND THE ANGULAR DISTRIBUTION
+  LOGIC    A pit at the edge of the piece subtends a smaller solid angle than
+           one at the centre, so it under-represents the flux in that
+           direction. Weight each bin by
+                Omega = r / (r^2 + x^2 + y^2)^(3/2)
+           and divide the counts by it.
+           Then convert x position to an angle relative to the beam:
+                theta_abs = theta0 + degrees(arctan(x / r))
+           with theta0 = 125 degrees, the angle of the piece's centre.
+  A COMMENT records that r was corrected from 6.0 to 4.0 cm, justified by
+  cross-checking SBD counts against CR-39 counts "matching target yields
+  within 5%". That justification is itself downstream of the 355-count
+  pile-up number, so it needs re-deriving now that the number is ~60.
+  STATUS   this is the contradiction flagged in cells 22/23. Pick one r.
+
+CELLS 35-37 — the CR-39 differential cross-section
+  LOGIC    dsigma/dOmega(13CD) = (counts_13CD / counts_DD)
+                                 * dsigma/dOmega(DD) / normalization
+           with counts_DD = 5,438,178, normalization = 0.172 cm^2 (the SBD
+           aperture area), cross_DD = 20.56 barns assumed isotropic.
+  PROBLEMS  same 20.56-barns and isotropy issues as notebook A, PLUS a
+           dimensional one: dividing a differential cross-section by an area
+           in cm^2 does not give mb/sr, which is what the y-axis says. The
+           units of this plot are not what the label claims.
+
+CELLS 38-43 — loose scratch arithmetic, no context
+      cell 38: (cos^2(102) + cos^2(148) + cos(102)cos(148))/3 = 0.3129
+               an angular averaging factor between 102 and 148 degrees
+      cell 39: 0.31 * 6976 * (4/6)^2 = 961.1
+      cell 40: cos^2(23 deg) = 0.8473
+      cell 41: 1550 * 0.84 = 1302.0
+      cell 42: 3100 * 0.847 = 2625.7
+      cell 43: 600 / 0.086 = 6976.7
+  These are somebody working through geometry factors on the back of an
+  envelope. None of the inputs (6976, 1550, 3100, 600, 0.086) are defined
+  anywhere in the notebook. They should be either documented or deleted —
+  right now they read like results.
+
+CELLS 44-49 — post-cut distributions
+  Diameter N(d), radial N(r), and the 2D N(d,e). Note cell 48 assigns
+      r = np.sqrt(x**2 + y**2)
+  which clobbers the r = 4.0 cm distance variable from cells 33/34 with an
+  array of radii. Another shadowing trap.
+
+CELLS 50-51 — SUMMARY
+  RESULT   scan grid          106 x 144
+           total scan area    22.2793 cm^2
+           tracks after cuts  120,469  (7.892 per frame)
+           signal area        9.6000 cm^2
+           raw in signal      72,550
+           background scaled  49,378.1
+           NET SIGNAL         23,171.9 +/- 707.5
+           net, C-vs-D method 22,963.0
+
+CELL 52 — 2536 * 1.45e-3 = 3.6772. Undocumented.
+
+CELL 53 — FLUX COMPARISON SBD -> CR-39
+  LOGIC    Phi_expected = (C_SBD / A_SBD) * (r_SBD / r_CR39)^2 * cos(theta)
+                          * facility_factor
+           Three fixes are recorded in the comments and all three are real:
+           (i)  A BUGFIX: C_SBD used to point at N_sig_total, the 72,550 raw
+                CR-39 tracks. That is the variable-shadowing bug that produced
+                the famous ~16,000% discrepancy.
+           (ii) A DIRECTION FIX: the facility factor was being divided when it
+                should be multiplied for this direction of conversion.
+           (iii) The facility factor is now DISABLED (set to 1.0) because the
+                old 0.9676 was measured at 115 degrees, not the 125 degrees of
+                this CR-39, and Shahina does not trust it.
+  RESULT   Phi_SBD                  = 2063.953 tracks/cm^2
+           Phi_expected at CR-39    =  917.313 tracks/cm^2
+           Phi observed at CR-39    = 2413.738 tracks/cm^2
+           ratio expected/observed  = 0.380   (-62%)
+  BUT      this uses C_SBD = 355.0, the pile-up peak. Substitute the real
+           ~60 counts and Phi_expected drops to about 155 tracks/cm^2, and
+           the CR-39 then reads roughly 15.6x MORE than the SBD predicts.
+  STATUS   *** THIS CELL'S HEADLINE NUMBER IS BUILT ON THE PILE-UP PEAK. ***
+           Update C_SBD and re-run. This is the highest-priority single fix
+           in the repository.
+
+CELL 54 — empty.
+
+
+================================================================================
+   PART 4 — THREE NEW PLOTS FROM THE PRZYBOCKI ANGLE-RESPONSE PAPER
+================================================================================
+
+You asked for three plots from
+    Przybocki et al. (2021), "Response of CR-39 nuclear track detectors to
+    protons with non-normal incidence", Rev. Sci. Instrum. 92, 013504.
+
+Script:  scratch/przybocki_angle_response_plots.py
+Output:  CR-39_Python_code/plots/przybocki_1_eccentricity_vs_angle.png
+         CR-39_Python_code/plots/przybocki_2_critical_angle_vs_energy.png
+         CR-39_Python_code/plots/przybocki_3_background_vs_maxcontrast.png
+
+HOW THE DATA WAS OBTAINED — READ THIS
+The paper publishes these as figures. There is no data table and no
+supplementary data file. So the numbers in the script were read off the
+published figures BY EYE, at roughly +/- 1 eccentricity unit and +/- 2.5
+degrees. They are good enough to answer "is our cut in a sensible place".
+They are NOT good enough to fit, to publish, or to build an error budget on.
+The script says so at the top, in detail. The one exception is the filter
+energies, which are quoted exactly from the paper's Table I.
+
+The paper's experiment, for context: 3.02 MeV D+D protons were fired at a
+CR-39 piece behind six aluminium step filters (5.36 to 72.35 um thick),
+degrading them to six energies from 2.898 down to 0.740 MeV. The whole
+assembly was rotated to 0, 10, 20, 25, 30, 35, 40, 45 and 50 degrees. Pieces
+were etched for 2 h, 4 h and 5 h.
+
+--------------------------------------------------------------------------------
+PLOT 1 — TRACK ECCENTRICITY vs INCIDENT ANGLE
+   (six panels, one per filter energy; three etch times each; from Fig. 11)
+
+WHAT IT SHOWS
+Tracks start nearly round (e ~ 1-4) at normal incidence and get steadily more
+oval as the angle increases — as you would expect, a proton coming in at a
+slant carves an elliptical hole. The effect is strongly ENERGY DEPENDENT:
+
+    2.898 MeV : e goes 1.3 -> 21.5 -> 32.3 between 0 and 25 degrees
+    2.471 MeV : e goes 1.2 -> 14.0 -> 28.3 between 0 and 30 degrees
+    2.063 MeV : e goes 1.3 ->  7.8 -> 32.3 between 0 and 35 degrees
+    1.668 MeV : e goes 1.4 ->  6.8 -> 19.6 between 0 and 35 degrees
+    1.201 MeV : barely moves — stays under 7 at every angle
+    0.740 MeV : essentially flat at e ~ 1-4. Tracks stay round.
+
+Beyond the critical angle (dashed grey line) the eccentricity DROPS sharply.
+The paper is explicit that this is an artefact, not physics: past the critical
+angle you can barely see any tracks at all, so the few that survive are a
+biased sample.
+
+WHY IT MATTERS TO US
+The green dotted line on each panel is our flat cut, e <= 15. Reading where
+the curves cross it:
+
+    at 2.898 MeV our cut starts rejecting real protons at about 17 degrees
+    at 2.471 MeV                                       at about 21 degrees
+    at 2.063 MeV                                       at about 26 degrees
+
+Our CR-39 piece is 2.5 cm in radius. At the notebook's own corrected distance
+of 4.0 cm, the corners of the piece see protons at up to 32.0 degrees. So a
+flat e <= 15 cut is silently deleting real signal from the outer part of the
+piece. That is exactly what cells 22/23 were trying to fix — the physics
+behind those cells is sound, even though the cells themselves cite the wrong
+figure and have never been run.
+
+--------------------------------------------------------------------------------
+PLOT 2 — CRITICAL ANGLE vs PROTON ENERGY   (your "angle vs MeV" plot)
+
+WHAT "CRITICAL ANGLE" MEANS
+The angle at which CR-39's detection efficiency has fallen to 50%. Past it,
+you are missing more protons than you are catching. The paper extracts it from
+the detection-efficiency data (Fig. 7) and marks it on every eccentricity
+panel.
+
+THE MEASURED CURVE
+    0.740 MeV -> 20 degrees
+    1.201 MeV -> 30
+    1.668 MeV -> 35        <- the peak
+    2.063 MeV -> 30
+    2.471 MeV -> 30
+    2.898 MeV -> 25
+
+The shape is a hump. Faster protons are HARDER to detect off-axis, not easier
+— they deposit less energy per unit length, so the latent damage trail is
+fainter and a slanted trail is fainter still. And the falloff below 1.2 MeV
+has a different cause: those protons do not penetrate deeper than the etch
+removes, so their tracks get dissolved away before you can see them.
+
+Hard limit from the paper: above 45 degrees, NO tracks could be resolved from
+background at any energy. That is drawn as the red line.
+
+WHY IT MATTERS TO US
+Our 13C+d protons arrive at the CR-39 at 5.6 MeV in vacuum, well above the
+paper's 2.9 MeV maximum, so we are extrapolating. But the trend is
+monotonically DOWNWARD above 1.7 MeV, so if anything the critical angle for
+our protons is BELOW 25 degrees. Our piece spans 0 to 32 degrees. The outer
+ring of our detector is plausibly past its own critical angle, meaning our
+efficiency is not uniform across the piece and the solid-angle correction in
+cells 33/34 does not account for that.
+
+--------------------------------------------------------------------------------
+PLOT 3 — INTRINSIC BACKGROUND (tracks/cm^2) vs MAXIMUM ACCEPTED CONTRAST
+   (from Fig. 5; original background scans by Lahmann et al.)
+
+WHAT IT SHOWS
+24 pieces of CR-39 that were NEVER exposed to any ions were etched and
+scanned. The plot is cumulative: at a given maximum contrast, how many
+tracks/cm^2 does the scanner find if you accept everything up to that
+contrast. Because the paper shows 24 unlabelled dot series, what is
+reproduced here is the band they span — minimum, median and maximum — not 24
+identified curves.
+
+The curve is steeply non-linear:
+
+    accept up to c <= 20   ->  ~130 tracks/cm^2  (typical piece)
+    accept up to c <= 50   ->  ~2,900 tracks/cm^2
+    accept up to c <= 75   ->  ~14,000 typical, up to 28,000 on a bad piece
+
+Every step you loosen the contrast cut, you buy in a lot more junk. The paper
+imposes c <= 50 as its own working limit.
+
+WHY IT MATTERS TO US, AND THIS IS THE INTERESTING ONE
+Our cut is c <= 20, which is TIGHTER than the paper's. At that setting the
+intrinsic plastic background should be about 130 tracks/cm^2.
+
+We measure 24,517 tracks/cm^2 in our signal box.
+
+That is roughly 190 times the intrinsic background of clean plastic. So
+whatever is filling our detector, it is NOT the plastic's own manufacturing
+defects. The meeting-3 note in cell 29 assumed the notch already contained the
+plastic's intrinsic ~100 tracks/cm^2 baseline — that assumption is fine, but
+it is also almost irrelevant, because the intrinsic baseline is 0.5% of what
+we are actually seeing. Our background is something real hitting the plastic.
+See Problem #1.
+
+
+================================================================================
+   PART 5 — DIRECT ANSWER: WHERE ARE THE PEAKS?
+================================================================================
+
+YOU ASKED: is it 4.81 or 5.24 or what.
+
+SHORT ANSWER: 5.24 MeV is the real signal. 4.84 MeV is an electronics
+artefact. And the CR-39 does not have an energy peak at all — that question
+does not apply to it.
+
+--------------------------------------------------------------------------------
+THE SBD SPECTRUM HAS THREE FEATURES
+--------------------------------------------------------------------------------
+
+  2.46 MeV   ~5.35 MILLION counts     REAL — D+D reference protons
+             Born at 3.02 MeV, lost 0.56 MeV in a foil in front of the SBD.
+             Fitted position 2.4599 MeV, width sigma 0.0632 MeV.
+             This is the normalisation line. It is not the signal.
+
+  4.84 MeV   ~382 net counts          ARTEFACT — PILE-UP, NOT PHYSICS
+             Fitted position 4.8375 MeV, width sigma 0.0940 MeV.
+             This is two D+D protons arriving within 2.5 microseconds of each
+             other and being recorded as one event at their combined energy.
+             Four independent pieces of evidence, and they all agree:
+
+               1. POSITION. 2 x 2.4574 = 4.915 MeV. Observed 4.838.
+               2. WIDTH. Adding two 0.0578-wide measurements gives
+                  sqrt(2) x 0.0578 = 0.082. Observed 0.094.
+               3. RATE SCALING. Its ratio to the 2.46 MeV line RISES with
+                  beam rate at +6.0 sigma. A real line cannot do that. The
+                  flat "real line" model gives chi2 = 42.7 for 3 degrees of
+                  freedom — comprehensively excluded.
+               4. HARDWARE. Invert the Poisson pile-up formula for the
+                  resolving time needed to produce this many counts and you
+                  get 2537 ns. The digitizer's configured trigger holdoff is
+                  2500 ns. That is a 1.5% match to a number nobody tuned.
+
+             Also: 4.84 MeV is simply the wrong energy for 13C(d,p)14C, which
+             should give 5.55 MeV in vacuum. Off by 0.7 MeV, far beyond any
+             calibration error.
+
+  5.24 MeV   ~55 net counts           REAL — this is the 13C+d signal
+             Window 5.05 - 5.40 MeV, sideband-subtracted, 6.0 sigma.
+             ~60 counts after dead-time correction.
+             5.55 MeV in vacuum, minus ~0.35 MeV in the same foil.
+             Its ratio to the 2.46 MeV line is FLAT vs beam rate
+             (slope -1.3 sigma), which is exactly what a real nuclear line
+             must do and what a pile-up peak cannot do.
+
+  THE FOIL CONSISTENCY ARGUMENT tying it together: the 3.02 MeV proton loses
+  0.563 MeV and the 5.55 MeV proton loses ~0.35 MeV. The faster particle loses
+  LESS. That is the correct behaviour of stopping power, and both numbers are
+  consistent with ~50 um of aluminium-equivalent material. One foil explains
+  both peak positions simultaneously. No other hypothesis we tried explains
+  either of them.
+
+  STILL TO CONFIRM: that foil is inferred, not documented. Check the beamline
+  drawing and run SRIM.
+
+--------------------------------------------------------------------------------
+WHY 4.81 KEEPS APPEARING IN CONVERSATION
+--------------------------------------------------------------------------------
+The fitted value is 4.8375, usually rounded to 4.84. If you have seen 4.81
+somewhere it is either a different rounding or a different fit window. It is
+the same feature, and it is the pile-up peak either way.
+
+--------------------------------------------------------------------------------
+THE CR-39 "PEAK"
+--------------------------------------------------------------------------------
+CR-39 measures pit geometry, not energy, so asking for its peak in MeV is a
+category error. What it has instead:
+
+  DIAMETER distribution:  peaks around d = 7.5 um
+      (median 7.485 um, mean 7.571, within the accepted 2.0 - 13.0 um window)
+
+  CONTRAST distribution:  peaks around c = 11
+      (median 11, mean 11.675, within the accepted c <= 20 window)
+
+  In the 2D diameter-vs-contrast plane there are TWO islands:
+      the SIGNAL island   d ~ 8 um, c < 20    (wide, dark pits)
+      the BACKGROUND island d < 5 um, c > 40  (small, faint pits)
+  The quality cuts are drawn to keep the first and reject the second.
+
+  The protons the CR-39 is supposed to be recording are the 5.6 MeV 13C+d
+  protons, because the 125-50 um Ta filter stops the 3 MeV D+D protons dead.
+  So there is no "2.46 MeV feature" on the CR-39 and there should not be one.
+
+  IN ENERGY TERMS: the CR-39 tells you 5.6 MeV protons by DESIGN — via the
+  filter, not via a measurement. Its 7.5 um diameter peak is consistent with
+  ~5-6 MeV protons at 5 h etch, but nobody in this repo has done the
+  diameter-to-energy calibration to prove it. That is a gap.
+
+
+================================================================================
+   PART 6 — THE PROBLEMS, RANKED
+================================================================================
+
+Ranked by how much they change the answer, worst first.
+
+--------------------------------------------------------------------------------
+PROBLEM 1  ***  THE CR-39 BACKGROUND NOTCH IS NOT BACKGROUND  ***
+--------------------------------------------------------------------------------
+IN PLAIN TERMS
+The whole CR-39 measurement rests on: "the middle of the plastic has protons
+plus junk, the strip at the top has junk only, subtract and you are left with
+protons." Cell 19 measured whether that is true. It is not.
+
+    signal box : 24,517 tracks/cm^2
+    notch      : 22,165 tracks/cm^2
+    ratio      : 0.904
+
+The "empty" reference region is 90% as full as the signal region. There is no
+proton shadow. Subtracting it removes 90% of everything on the plate.
+
+WHY THIS IS SO BAD
+Every CR-39 number in the repo comes out of that subtraction. 72,550 minus
+49,378 = 23,172 is the difference of two large, nearly equal numbers. If the
+notch is contaminated with signal, the true answer is much larger than 23,172.
+If the plate is uniformly flooded with something that is not signal, the true
+answer could be near zero. Right now we cannot tell those apart, and 23,172 is
+quoted as if it were a measurement.
+
+WHAT WE KNOW IT IS NOT
+It is not the plastic's intrinsic defect background. Plot 3 above says that
+should be about 130 tracks/cm^2 at our contrast cut. We see 24,517. We are 190x
+above intrinsic. Something real is hitting the whole plate.
+
+CANDIDATES, none tested
+    - scattered particles from the chamber walls, flooding everything
+    - the Ta filter not covering the whole piece, or leaking
+    - neutron-induced recoils, which the filter cannot stop
+    - the piece was not where we think it was, so the "notch" is inside the
+      proton spot
+
+WHAT WOULD ACTUALLY SETTLE IT
+An unexposed control piece of the same plastic batch, etched the same 5 hours
+and scanned the same way. That gives a true zero. Without a control piece
+there is no way to know what the flat 22,000 tracks/cm^2 floor is.
+
+--------------------------------------------------------------------------------
+PROBLEM 2  ***  THE SBD AND THE CR-39 DISAGREE BY ~15x  ***
+--------------------------------------------------------------------------------
+IN PLAIN TERMS
+Two detectors watching the same reaction should agree once you correct for how
+big they are and how far away. They do not.
+
+The saved output in SBD cell 24 says the disagreement is a factor of 2.61.
+That output is STALE — it was produced before the pile-up correction. Redo it
+with the real numbers:
+
+    CR-39 net                            23,172 tracks
+    solid angle ratio (CR-39 / SBD)       24.81
+    SBD counts the CR-39 implies         ~934
+    SBD counts actually measured          ~60
+    DISAGREEMENT                         ~15.6x
+
+The CR-39 sees about 16 times more than the SBD says it should.
+
+Note this got WORSE, not better, when we fixed the pile-up. Before the fix the
+SBD "had" 355 counts and the gap was 2.6x. Correcting 355 down to 60 opened
+the gap to 15.6x. Fixing one error revealed a bigger one.
+
+MOST LIKELY EXPLANATION: this is the same thing as Problem 1. If the CR-39's
+23,172 is mostly not signal, the CR-39 side of this comparison is inflated and
+the two detectors might agree fine once the CR-39 background is understood.
+Problems 1 and 2 are probably one problem.
+
+SECONDARY CONTRIBUTOR, flagged in the cell's own comments and real: the SBD
+number integrates 54 runs over ~53 hours, the CR-39 integrates its own 5-hour
+exposure. Unless those windows coincide the comparison is invalid on its face.
+Nobody has checked which runs the CR-39 was actually in the chamber for. That
+alone could be a factor of several.
+
+--------------------------------------------------------------------------------
+PROBLEM 3  ***  KEY CELLS HAVE NEVER BEEN RUN; SAVED OUTPUTS ARE STALE  ***
+--------------------------------------------------------------------------------
+NEVER RUN, no output stored at all:
+    SBD notebook  cell 8   the pile-up rate-scaling test
+    SBD notebook  cell 10  the measurement of the REAL 13C+d line
+    pileup nb     cells 1, 2, 3   ALL of them
+    CR-39 nb      cells 22, 23    the incident-angle analysis
+
+Between them, that is every single one of the corrections from meeting 3. If
+you open these notebooks today, the empty cells sit under markdown headers
+that describe results, and the only numbers visible are the old wrong ones.
+
+STALE, meaning the saved output does not match the code above it:
+    SBD notebook cell 24. The output says cr39_net = 22,211.9,
+    facility_factor = 0.9676, observed = 355.0, ratio 2.61. The code on screen
+    says cr39_net = 23,171.9, facility_factor = 1.0, observed = pc1_real.
+    Three of the four inputs changed and the output was never refreshed.
+
+WRONG LABEL ON A FIGURE:
+    SBD notebook cell 14 draws an arrow at the 4.84 MeV peak reading
+    "protons from 13C+D". We now know that is the pile-up artefact. This is
+    the prettiest figure in the repo and therefore the most likely to end up
+    on a slide.
+
+FIX: run all three notebooks top to bottom and commit the outputs. Nothing in
+this list requires new physics, just execution.
+
+--------------------------------------------------------------------------------
+PROBLEM 4  ***  CHANNEL 1 HAS AN UNEXPLAINED 92-COUNT EXCESS  ***
+--------------------------------------------------------------------------------
+The pile-up story is airtight for CH2 (2537 ns vs 2500 ns holdoff). It does
+not work for CH1.
+
+    CH1 runs at 1.29 counts/s, 22x slower than CH2
+    pile-up scales as rate SQUARED, so CH1 should have essentially none
+    CH1 nevertheless has 92 net counts in the 4.84 MeV window
+    the tau needed to explain them is 445 MICROseconds, versus a 2.5 us
+        holdoff — off by a factor of 178
+
+So CH1's 4.84 MeV excess is real in the sense that it is there, and unexplained
+in the sense that pile-up cannot account for it. Possibilities nobody has
+checked: a different pulse-shaping issue on that channel, a genuinely
+different particle population, or contamination in the CH1 run list.
+
+Related CH1 problems:
+    (a) THREE DIFFERENT DEAD-TIME FACTORS are in use for the same experiment.
+        pileup notebook cell 3 : 53.289 / 34.443 = 1.547
+        actual file contents   : 58.108 / 34.443 = 1.687
+        SBD notebook cell 10   : 53.289 / 48.979 = 1.088
+        Where 53.289 came from is undocumented. Pick one, document it.
+    (b) CH1 was dead 41% of the time (34.4 h live out of 58.1 h real). That is
+        a large correction to be applying with a constant nobody can source.
+    (c) The rate-scaling test does not work on CH1. Its runs pool into groups
+        at 0.5, 61 and 197.7 counts/s — a 400x spread. Both windows come out
+        "rising with rate", which for the 5.24 window directly contradicts
+        CH2. The CH1 run list needs cleaning before that test means anything.
+    (d) The pileup notebook markdown says CH1 has "66 real 13C+d protons".
+        66 is the raw window count; the net after background subtraction is
+        34.8. The markdown overstates it.
+
+--------------------------------------------------------------------------------
+PROBLEM 5  ***  THE NOTEBOOK CONTRADICTS ITSELF ABOUT THE GEOMETRY  ***
+--------------------------------------------------------------------------------
+How far is the CR-39 from the target?
+
+    CR-39 cells 22, 23  say  d0 = 6.0 cm
+    CR-39 cells 33, 34  say  r  = 4.0 cm, with a comment saying 6.0 was wrong
+    CR-39 cell 53       says  r_CR39 = 6.0 cm
+    SBD   cell 24       says  r_CR39 = 6.0 cm
+
+All in the same analysis. This is not a cosmetic issue:
+    - solid angle goes as 1/r^2, so 4 vs 6 cm is a factor of 2.25 in flux
+    - the maximum incident angle across the piece is 32.0 deg at 4 cm but
+      22.6 deg at 6 cm, which changes whether we are past the critical angle
+    - the justification given for switching to 4.0 cm was that it made SBD and
+      CR-39 agree within 5% — but that agreement was computed with the 355
+      pile-up counts. That justification has now evaporated and needs redoing.
+
+--------------------------------------------------------------------------------
+PROBLEM 6  ***  THE CROSS-SECTION ARITHMETIC HAS UNIT AND PHYSICS ISSUES  ***
+--------------------------------------------------------------------------------
+    (a) cross_DD = 20.56 barns is used as the D(d,p)T cross-section. That
+        reaction is a few TENS OF MILLIBARNS at these energies. 20.56 barns is
+        roughly a thousand times too large. This looks like a barns/millibarns
+        slip. It has never been traced to a source. Every cross-section number
+        downstream inherits it.
+    (b) differential_cross_DD = 20.56/(4*pi) assumes D+D is isotropic. It is
+        not, at these energies. Unjustified.
+    (c) CR-39 cell 37 divides a differential cross-section by an area in cm^2
+        and labels the result mb/sr. That is dimensionally not mb/sr.
+    (d) The numerator counts_13CD = 452 is a count in the 4.0-5.0 MeV window,
+        which is centred on the pile-up peak. Wrong numerator.
+
+--------------------------------------------------------------------------------
+PROBLEM 7  ***  THE ECCENTRICITY CUT IS DELETING REAL SIGNAL  ***
+--------------------------------------------------------------------------------
+Our flat cut e <= 15 is applied everywhere on the plate. Plot 1 shows that at
+2.9 MeV the paper's tracks cross e = 15 at about 17 degrees, and our plate
+extends to 32 degrees. So the outer part of our detector is being cut away for
+a geometric reason, not a physics reason.
+
+Cells 22/23 correctly identify this and propose a position-dependent cut. But
+those cells:
+    - are byte-for-byte duplicates of each other
+    - have never been run
+    - use d0 = 6.0 cm, contradicting cells 33/34 (Problem 5)
+    - cite "Fig. 9b" for eccentricity data; Fig. 9 is diameter vs energy, the
+      eccentricity data is Fig. 11
+    - use a made-up quadratic  e_max = 15 + 20*(theta/30)^2  that is not in
+      the paper, has no error bars, and no justification for being quadratic
+    - are based on 2-hour-etch numbers, while our piece was etched 5 hours
+
+That said, the effect they are correcting for is real, and Plot 1 confirms it.
+The cells need rebuilding on the right figure with the right etch time and the
+right distance, not deleting.
+
+--------------------------------------------------------------------------------
+PROBLEM 8  ***  VARIABLE SHADOWING, REPEATEDLY  ***
+--------------------------------------------------------------------------------
+This project has already been burned once by this — the 16,000% error came
+from C_SBD accidentally pointing at a CR-39 track count. The pattern is still
+present:
+
+    CR-39 cell 10:  `tracks = 34183`  overwrites the tracks DataFrame with an
+                    integer. It stays an integer until cell 27 reloads it.
+    CR-39 cell 48:  `r = np.sqrt(x**2+y**2)` overwrites the r = 4.0 cm
+                    detector distance with an array of radii.
+    SBD cell 10 explicitly names its variables _13c to avoid exactly this,
+                    which shows the team knows — the discipline just is not
+                    applied everywhere.
+
+Because notebooks keep state between runs, this class of bug produces answers
+that are wrong but not obviously wrong, and that change depending on what
+order you ran the cells in.
+
+--------------------------------------------------------------------------------
+PROBLEM 9  ***  UNDOCUMENTED MAGIC NUMBERS  ***
+--------------------------------------------------------------------------------
+Numbers used in the analysis that are not derived, sourced or explained
+anywhere in the repo:
+
+    34,183     CR-39 cell 10, a track count from nowhere
+    6976, 1550, 3100, 600, 0.086   CR-39 cells 39-43, all inputs undefined
+    2536, 1.45e-3                  CR-39 cell 52
+    53.289                         the dead-time numerator, two notebooks
+    0.9676                         the facility angular factor — at least this
+                                   one is now correctly disabled and the
+                                   reason is written down
+    20.56                          the D+D cross-section (see Problem 6)
+    the 54-run selection           why those 54 of 72, why skip 15-06
+
+--------------------------------------------------------------------------------
+PROBLEM 10  ***  CIRCULAR DEPENDENCY BETWEEN THE NOTEBOOKS  ***
+--------------------------------------------------------------------------------
+    CR-39 cell 33 sets r = 4.0 cm, justified by agreement with the SBD
+    CR-39 cell 53 imports C_SBD from the SBD notebook
+    SBD   cell 24 imports cr39_net, hard-coded as a literal 23171.9
+
+The two notebooks tune to each other, and one of the links is a copy-pasted
+literal rather than a computed value, so it goes stale silently. Whatever
+"agreement" is reported between them is partly manufactured. The two analyses
+need to be independent before their agreement means anything.
+
+
+================================================================================
+   PART 7 — WHAT TO DO NEXT, IN ORDER
+================================================================================
+
+DO FIRST — costs nothing, changes what everyone believes
+  1. Run all three notebooks top to bottom. Commit the outputs. Right now the
+     meeting-3 corrections exist only as unexecuted code.
+  2. Fix the "protons from 13C+D" label on SBD cell 14. It points at the
+     pile-up peak.
+  3. Update C_SBD in CR-39 cell 53 from 355 to the real ~60 and re-run.
+  4. Delete the duplicate of CR-39 cell 22/23.
+  5. Pick ONE value of r_CR39 and one dead-time factor, and put the reason in
+     a comment.
+
+DO NEXT — needs thought but no new data
+  6. Re-derive the SBD/CR-39 comparison honestly with ~60 counts, and state
+     the 15.6x gap plainly rather than leaving the stale 2.61x in the file.
+  7. Work out which of the 54 runs the CR-39 was actually in the chamber for,
+     and restrict the SBD count to those runs. This may close a large part of
+     the gap on its own.
+  8. Trace the 20.56 barns to a source, or replace it.
+  9. Rebuild the incident-angle cut on Fig. 11 (not Fig. 9), 5-hour etch, and
+     the agreed distance.
+
+NEEDS NEW MEASUREMENT — cannot be fixed at a keyboard
+ 10. Get an unexposed control piece of CR-39 from the same batch, etch it 5 h,
+     scan it. Without a true zero we cannot resolve Problem 1, and Problem 1
+     invalidates the CR-39 number.
+ 11. Find the foil in front of the SBD in the beamline drawing, measure its
+     thickness, run SRIM at 3.02 and 5.55 MeV. The foil currently exists only
+     as an inference from two energy losses.
+ 12. Get the new facility angular factor for 125 degrees, to replace the
+     distrusted 0.9676.
+
+================================================================================
+   APPENDIX — EVERY NUMBER IN ONE PLACE
+================================================================================
+
+SBD, channel 2, all runs on disk (71 folders)
+    D+D reference counts (2.25-2.65 MeV)     5,354,918
+    live time                                52.922 h
+    real time                                58.099 h
+    mean D+D rate                            28.11 counts/s
+    4.84 MeV window   raw 403   bkg 21.2   NET 381.8      <- PILE-UP
+    5.24 MeV window   raw  69   bkg 14.1   NET  54.9 +/- 9.1   <- SIGNAL
+    dead-time corrected 13C+d                60.3
+    tau_eff implied by the 4.84 peak         2537 ns
+    hardware trigger holdoff                 2500 ns   (1.5% match)
+    rate-scaling slope, 4.84 window          +6.0 sigma  -> pile-up
+    rate-scaling slope, 5.24 window          -1.3 sigma  -> real line
+
+SBD, channel 1, all runs on disk (72 folders)
+    D+D reference counts                     160,285
+    live time                                34.443 h
+    real time                                58.108 h
+    mean D+D rate                            1.293 counts/s
+    4.84 MeV window   raw 139   bkg 46.8   NET 92.2   <- UNEXPLAINED
+    5.24 MeV window   raw  66   bkg 31.2   NET 34.8 +/- 9.9
+    tau_eff implied by the 4.84 peak         445,000 ns  <- 178x the holdoff
+
+SBD fits, notebook A, 54-run curated set (5,441,926 events)
+    D+D line          mu 2.4599 MeV   sigma 0.0632   N 5,169,117 +/- 179,084
+    pile-up peak      mu 4.8375 MeV   sigma 0.0940   N 355.0 +/- 27.1
+
+CR-39 scan
+    file          A20260413_13CD_125-50umTaFilter_W75_5hr_40x_backside_s0.cpsa
+    grid          106 x 144 = 15,264 frames
+    pixel size    0.3280 um
+    frame size    444.1 x 328.7 um
+    scan area     22.2793 cm^2
+    raw tracks in bounds                     530,122
+    after eccentricity cut only              423,796
+    after all quality cuts                   120,469   (7.892 per frame)
+    diameter median / mean                   7.485 / 7.571 um
+    contrast median / mean                   11 / 11.675
+
+CR-39 signal extraction
+    signal box     x[-1.5,1.5] y[-1.8,1.4]   A = 9.6000 cm^2
+    background     x[-1.37,1.47] y[1.50,1.89] A = 1.1076 cm^2
+    area scale                               8.6674
+    tracks in signal box                     72,550
+    tracks in notch                          5,697
+    notch scaled to box                      49,378.1
+    NET (scalar method)                      23,171.9 +/- 707.5
+    NET (C-vs-D map method)                  22,963.0
+    NET (pixel-by-pixel method)              23,041.7
+    observed flux                            2,413.7 tracks/cm^2
+
+CR-39 background diagnostic
+    density in signal box                    24,517 tracks/cm^2
+    density in notch                         22,165 tracks/cm^2
+    density above notch                      15,309 tracks/cm^2
+    notch / box ratio                        0.904
+    expected intrinsic at c<=20 (Przybocki)  ~130 tracks/cm^2
+    we are above intrinsic by                ~190x
+
+Geometry (contested — see Problem 5)
+    SBD    r = 4.0 cm, A = 0.172 cm^2, 90 deg to beam,  Omega = 0.010750 sr
+    CR-39  r = 4.0 or 6.0 cm, A = 9.6 cm^2, 125 deg to beam
+           at 6.0 cm:  Omega = 0.266667 sr,  ratio 24.81
+    max incident angle across the piece   32.0 deg at 4 cm / 22.6 deg at 6 cm
+
+Przybocki et al. (2021) reference values, digitized
+    filter energies (Table I, exact)  2.898, 2.471, 2.063, 1.668, 1.201, 0.740
+    critical angles (digitized)       25, 30, 30, 35, 30, 20 degrees
+    hard detection limit              45 degrees, no tracks at any energy
+    intrinsic background c<=20        ~130 tracks/cm^2
+    intrinsic background c<=50        ~2,900 tracks/cm^2
+    intrinsic background c<=75        ~14,000 typical, ~28,000 worst piece
+
+================================================================================
+                                   END
+================================================================================
